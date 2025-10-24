@@ -12,6 +12,15 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 from dotenv import load_dotenv
+from flask import Flask
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "Bot is running!"
+
+
+
 
 load_dotenv()
 
@@ -408,5 +417,13 @@ async def setup_hook():
             print("Slash commands synced globally (may take a while to propagate).")
     except Exception as e:
         print("Sync error:", e)
+
+import threading
+
+def run_web():
+    app.run(host="0.0.0.0", port=10000)
+
+threading.Thread(target=run_web).start()
+
 
 bot.run(TOKEN)
