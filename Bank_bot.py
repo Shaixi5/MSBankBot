@@ -217,6 +217,25 @@ class OptionSelect(discord.ui.Select):
             view=ApprovalView(requester_id=view.requester.id)
         )
 
+
+
+        # NEW: DM all members with the approver roles (e.g. Bank Manager)
+        for rid in APPROVER_ROLE_IDS:
+            role = guild.get_role(rid)
+            if role:
+                for member in role.members:
+                    try:
+                        await member.send(
+                            f"💸 New bank request from {view.requester.mention}\n"
+                            f"Amount: **{view.amount:,}**\n"
+                            f"When: **{mapping[chosen]}**\n"
+                            f"Ticket channel: {channel.mention}"
+                        )
+                    except discord.Forbidden:
+                        # They have DMs closed or blocked the bot
+                        pass
+
+        
         await interaction.response.edit_message(
             content=f"Option selected: **{mapping[chosen]}** — ticket created: {channel.mention}",
             view=None
