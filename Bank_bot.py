@@ -1,9 +1,8 @@
 # bank_ticket_bot.py
 # Python 3.10+ | discord.py 2.4+
-# pip install -U discord.py python-dotenv
+# pip install -U discord.py python-dotenv flask
 
 import os
-import io
 import re
 import datetime as dt
 from typing import Optional
@@ -13,27 +12,27 @@ from discord import app_commands
 from discord.ext import commands
 from dotenv import load_dotenv
 from flask import Flask
+
+# ------------------------------ Flask (for Render free web service) ------------------------------
+
 app = Flask(__name__)
 
-@app.route('/')
+@app.route("/")
 def home():
     return "Bot is running!"
 
-
-
+# ------------------------------ Discord Setup ------------------------------
 
 load_dotenv()
 
 TOKEN = os.getenv("DISCORD_TOKEN")
-GUILD_ID = int(os.getenv("GUILD_ID", "0"))  # 0 = global commands (propagation delay). Set your server ID for instant sync.
+GUILD_ID = int(os.getenv("GUILD_ID", "0"))  # 0 = global commands (slower). Set your server ID for instant sync.
 # Tickets category: set an ID or a name (the bot will find/create by name if ID is 0)
 TICKETS_CATEGORY_ID = int(os.getenv("TICKETS_CATEGORY_ID", "0"))
 TICKETS_CATEGORY_NAME = os.getenv("TICKETS_CATEGORY_NAME", "📥 bank-tickets")
 # Approvers: role IDs and (optional) specific user IDs
 APPROVER_ROLE_IDS = [int(x) for x in os.getenv("APPROVER_ROLE_IDS", "").split(",") if x.strip()]
 APPROVER_USER_IDS = [int(x) for x in os.getenv("APPROVER_USER_IDS", "").split(",") if x.strip()]
-# Optional logs channel for transcripts on close
-LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID", "0"))
 
 INTENTS = discord.Intents.default()
 INTENTS.members = True  # needed to check roles for approvers
@@ -73,20 +72,6 @@ def is_approver(member: discord.Member) -> bool:
         return True
     approver_roles = set(APPROVER_ROLE_IDS)
     return any(r.id in approver_roles for r in member.roles)
-
-async def make_transcript(channel: discord.TextChannel) -> discord.File:
-    """Create a simple text transcript of the channel's history and return as a File."""
-    lines = []
-    async for msg in channel.history(limit=None, oldest_first=True):
-        ts = msg.created_at.strftime("%Y-%m-%d %H:%M:%S UTC")
-        author = f"{msg.author} [{msg.author.id}]"
-        content = msg.content.replace("\n", "\n    ")
-        lines.append(f"[{ts}] {author}:\n    {content}")
-        for a in msg.attachments:
-            lines.append(f"    [attachment] {a.filename} -> {a.url}")
-    buff = io.StringIO("\n".join(lines) or "(no messages)")
-    fname = f"transcript_{channel.name}_{int(dt.datetime.utcnow().timestamp())}.txt"
-    return discord.File(fp=buff, filename=fname)
 
 async def resolve_or_create_tickets_category(guild: discord.Guild) -> Optional[discord.CategoryChannel]:
     category: Optional[discord.CategoryChannel] = None
@@ -160,7 +145,13 @@ class OptionSelect(discord.ui.Select):
             discord.SelectOption(label="Only if I am in Hospital", value="hospital"),
             discord.SelectOption(label="Only if I am Flying", value="flying"),
         ]
-        super().__init__(placeholder="Choose one option…", min_values=1, max_values=1, options=opts, custom_id="bank_option_select")
+        super().__init__(
+            placeholder="Choose one option…",
+            min_values=1,
+            max_values=1,
+            options=opts,
+            custom_id="bank_option_select"
+        )
         self.parent_view = parent_view
 
     async def callback(self, interaction: discord.Interaction):
@@ -179,10 +170,14 @@ class OptionSelect(discord.ui.Select):
 
         overwrites = {
             guild.default_role: discord.PermissionOverwrite(view_channel=False),
-            view.requester: discord.PermissionOverwrite(view_channel=True, send_messages=True, attach_files=True,
-                                                        read_message_history=True, add_reactions=False),
-            guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_channels=True,
-                                                  read_message_history=True),
+            view.requester: discord.PermissionOverwrite(
+                view_channel=True, send_messages=True, attach_files=True,
+                read_message_history=True, add_reactions=False
+            ),
+            guild.me: discord.PermissionOverwrite(
+                view_channel=True, send_messages=True, manage_channels=True,
+                read_message_history=True
+            ),
         }
         for rid in APPROVER_ROLE_IDS:
             role = guild.get_role(rid)
@@ -194,7 +189,11 @@ class OptionSelect(discord.ui.Select):
 
         safe_name = view.requester.name.lower().replace(" ", "-")
         ch_name = f"bank-{safe_name}-{view.requester.id}"[:95]
-        channel = await category.create_text_channel(name=ch_name, overwrites=overwrites, reason="Bank request ticket")
+        channel = await category.create_text_channel(
+            name=ch_name,
+            overwrites=overwrites,
+            reason="Bank request ticket"
+        )
 
         mapping = {
             "ASAP": "ASAP",
@@ -203,7 +202,11 @@ class OptionSelect(discord.ui.Select):
             "flying": "Only if I am Flying",
         }
 
-        embed = discord.Embed(title="💸 Faction Bank Request", color=discord.Color.blurple(), timestamp=dt.datetime.utcnow())
+        embed = discord.Embed(
+            title="💸 Faction Bank Request",
+            color=discord.Color.blurple(),
+            timestamp=dt.datetime.now(dt.timezone.utc)
+        )
         embed.add_field(name="Member", value=f"{view.requester.mention} ({view.requester.id})", inline=False)
         embed.add_field(name="Amount", value=f"{view.amount:,}", inline=True)
         embed.add_field(name="When to send", value=mapping[chosen], inline=True)
@@ -217,13 +220,14 @@ class OptionSelect(discord.ui.Select):
             view=ApprovalView(requester_id=view.requester.id)
         )
 
-
-
-        # NEW: DM all members with the approver roles (e.g. Bank Manager)
+        # DM all *human* members with the approver roles (e.g. Bank Manager)
         for rid in APPROVER_ROLE_IDS:
             role = guild.get_role(rid)
             if role:
                 for member in role.members:
+                    # Skip bots (including this bot)
+                    if getattr(member, "bot", False):
+                        continue
                     try:
                         await member.send(
                             f"💸 New bank request from {view.requester.mention}\n"
@@ -235,7 +239,6 @@ class OptionSelect(discord.ui.Select):
                         # They have DMs closed or blocked the bot
                         pass
 
-        
         await interaction.response.edit_message(
             content=f"Option selected: **{mapping[chosen]}** — ticket created: {channel.mention}",
             view=None
@@ -286,30 +289,11 @@ class ApprovalView(discord.ui.View):
         if not isinstance(channel, discord.TextChannel):
             return await interaction.response.send_message("Not a text channel.", ephemeral=True)
 
-        # Make transcript
-        file = await make_transcript(channel)
+        await interaction.response.send_message(
+            "Closing this ticket and deleting the channel…",
+            ephemeral=True
+        )
 
-        # Notify + upload transcript
-        await interaction.response.send_message("Closing… uploading transcript and deleting this channel.", ephemeral=True)
-        logged = False
-        if interaction.guild and LOG_CHANNEL_ID:
-            log_ch = interaction.guild.get_channel(LOG_CHANNEL_ID)
-            if isinstance(log_ch, discord.TextChannel):
-                try:
-                    await log_ch.send(
-                        content=f"📄 Transcript for **{channel.name}** (closed by {interaction.user.mention})",
-                        file=file
-                    )
-                    logged = True
-                except Exception:
-                    logged = False
-        if not logged:
-            try:
-                await interaction.user.send(content=f"📄 Transcript for **{channel.name}**", file=file)
-            except Exception:
-                pass
-
-        # Delete ticket channel
         try:
             await channel.delete(reason=f"Closed by {interaction.user}")
         except Exception:
@@ -361,30 +345,11 @@ class BankRequest(commands.Cog):
         if not isinstance(channel, discord.TextChannel):
             return await interaction.response.send_message("Not a text channel.", ephemeral=True)
 
-        # Make transcript
-        file = await make_transcript(channel)
+        await interaction.response.send_message(
+            "Closing this ticket and deleting the channel…",
+            ephemeral=True
+        )
 
-        # Notify + upload transcript
-        await interaction.response.send_message("Closing… uploading transcript and deleting this channel.", ephemeral=True)
-        logged = False
-        if interaction.guild and LOG_CHANNEL_ID:
-            log_ch = interaction.guild.get_channel(LOG_CHANNEL_ID)
-            if isinstance(log_ch, discord.TextChannel):
-                try:
-                    await log_ch.send(
-                        content=f"📄 Transcript for **{channel.name}** (closed by {interaction.user.mention})",
-                        file=file
-                    )
-                    logged = True
-                except Exception:
-                    logged = False
-        if not logged:
-            try:
-                await interaction.user.send(content=f"📄 Transcript for **{channel.name}**", file=file)
-            except Exception:
-                pass
-
-        # Delete ticket channel
         try:
             await channel.delete(reason=f"Closed by {interaction.user}")
         except Exception:
@@ -437,12 +402,13 @@ async def setup_hook():
     except Exception as e:
         print("Sync error:", e)
 
+# ------------------------------ Run Flask + Bot ------------------------------
+
 import threading
 
 def run_web():
     app.run(host="0.0.0.0", port=10000)
 
-threading.Thread(target=run_web).start()
-
+threading.Thread(target=run_web, daemon=True).start()
 
 bot.run(TOKEN)
